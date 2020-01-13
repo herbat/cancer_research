@@ -56,11 +56,13 @@ noise = 'norm' # or cauchy
 pca_mse_all = []
 ica_mse_all = []
 nmf_mse_all = []
+rnd_mse_all = []
 
 for std in stds:
     pca_mse = 0
     ica_mse = 0
     nmf_mse = 0
+    rnd_mse = 0
 
     for i in range(num_datasets):
         profiles = gen_profiles(num_celltypes, num_genes, num_markers, noise, std)
@@ -92,19 +94,28 @@ for std in stds:
         W = model.fit_transform(samples_normalized)
         res = W / np.expand_dims(np.sum(W, axis=1), axis=1)
         nmf_mse  += (mean_squared_error(proportions, res))
+        
+        # Random proportions
+        rnd_prop = np.random.uniform(0,1,(num_samples,num_celltypes))
+        rndsum = np.sum(rnd_prop,1)
+        rndsum = np.matrix([rndsum, rndsum, rndsum]).T
+        rnd_prop = rnd_prop/rndsum
+        rnd_mse += mean_squared_error(proportions, rnd_prop)
 
     # average over all datasets
     pca_mse_all.append(pca_mse/num_datasets)
     ica_mse_all.append(ica_mse/num_datasets)
     nmf_mse_all.append(nmf_mse/num_datasets)
+    rnd_mse_all.append(rnd_mse/num_datasets)
 
 plt.figure()
 plt.plot(stds, pca_mse_all, label='pca')
 plt.plot(stds, ica_mse_all, label='ica')
 plt.plot(stds, nmf_mse_all, label='nmf')
+plt.plot(stds, rnd_mse_all, label = 'random')
 plt.xlabel("Standard deviation")
 plt.ylabel("MSE")
-plt.ylim(0, 0.09)
+#plt.ylim(0, 0.15)
 plt.title("MSE per method, " + str(num_markers) + " marker genes")
 plt.legend()
 plt.show()
