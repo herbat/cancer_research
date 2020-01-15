@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 import pylab as pl
 
 
-def gen_profiles(num_profiles, genes, n_markers, noise, std=0.05, m_amp=3):
+def gen_profiles(num_profiles, genes, n_markers, noise, std, m_amp=3):
     profiles = []
 
     for p in range(num_profiles):
@@ -24,7 +24,7 @@ def gen_profiles(num_profiles, genes, n_markers, noise, std=0.05, m_amp=3):
         else:
             n = np.random.standard_cauchy(genes)
         # add noise to the generated profile
-        profile += n
+        profile *= 1+n
         # append to profiles
         profiles.append(profile)
 
@@ -45,7 +45,9 @@ def gen_samples(profiles, n_samples, std):
     return samples, proportions.T
 
 
-stds = [0.01, 0.1, 0.2, 0.3, 0.5, 1, 2]
+#stds = [0.01, 0.1, 0.2, 0.3, 0.5, 1, 2]
+#stds = [0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1]
+stds = [0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
 num_datasets = 20
 num_celltypes = 3
 num_markers = 200
@@ -71,7 +73,8 @@ for std in stds:
 
         # preprocessing
         samples_normalized = normalize(samples, axis=0).T
-        samples_normalized -= np.min(samples_normalized)
+        if np.min(samples_normalized) < 0:
+            samples_normalized -= np.min(samples_normalized)
 
         # PCA
         pca = PCA(n_components=num_celltypes)
@@ -96,11 +99,9 @@ for std in stds:
         nmf_mse  += (mean_squared_error(proportions, res))
         
         # Random proportions
-        rnd_prop = np.random.uniform(0,1,(num_samples,num_celltypes))
-        rndsum = np.sum(rnd_prop,1)
-        rndsum = np.matrix([rndsum, rndsum, rndsum]).T
-        rnd_prop = rnd_prop/rndsum
-        rnd_mse += mean_squared_error(proportions, rnd_prop)
+        rnd_prop = np.random.rand(num_celltypes,num_samples)
+        rnd_prop /= np.sum(rnd_prop, axis = 0)
+        rnd_mse += mean_squared_error(proportions, rnd_prop.T)
 
     # average over all datasets
     pca_mse_all.append(pca_mse/num_datasets)
@@ -116,6 +117,6 @@ plt.plot(stds, rnd_mse_all, label = 'random')
 plt.xlabel("Standard deviation")
 plt.ylabel("MSE")
 #plt.ylim(0, 0.15)
-plt.title("MSE per method, " + str(num_markers) + " marker genes")
+plt.title("MSE per method, " + str(num_markers) + " marker genes, " + str(num_celltypes) + " cell types")
 plt.legend()
 plt.show()
