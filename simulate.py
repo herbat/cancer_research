@@ -1,72 +1,16 @@
-import os, sys, math, pickle
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.decomposition import FastICA
 from sklearn.decomposition import NMF
 from sklearn.preprocessing import normalize
 from sklearn.metrics import mean_squared_error
+from matplotlib import pyplot as plt
+import pylab as pl
+from scipy.stats.stats import pearsonr
 
-pickle_expr = 'gene_expressions.p'
-pickle_meth = 'methylations.p'
-pickle_expr_names = 'expr_names.p'
-pickle_meth_names = 'meth_names.p'
 
-def read_data(type='expr'):
-    if type == 'expr':
-        if os.path.isfile(pickle_expr) and os.path.isfile(pickle_expr_names):
-            print('Loading expression pickle')
-            return pickle.load(open(pickle_expr, 'rb')), pickle.load(open(pickle_expr_names, 'rb'))
-        else:
-            print('Reading data...')
-            all_samples = []
-            names = []
-            c = 0
-            for subdir, dirs, files in os.walk('data'):
-
-                for file in files:
-                    if file[-8:] == "FPKM.txt":
-                        c += 1
-                        sample = []
-                        sys.stdout.write('\r')
-                        # the exact output you're looking for:
-                        sys.stdout.write("[%-55s] %d%%" % ('=' * math.floor(c/10), c/5.5))
-                        sys.stdout.flush()
-                        with open(os.path.join(subdir, file)) as f:
-                            for line in f:
-                                gene, exp = line.split('\t')
-                                if len(names) < len(file):
-                                    names.append(gene)
-                                exp = float(exp.strip())
-                                sample.append(exp)
-                        all_samples.append(np.array(sample))
-            print(np.shape(all_samples))
-            final = np.vstack(all_samples)
-            pickle.dump(final, open(pickle_expr, 'wb'))
-            pickle.dump(names, open(pickle_expr_names, 'wb'))
-            return final, names
-    elif type == 'meth':
-        if os.path.isfile(pickle_meth and os.path.isfile(pickle_meth_names)):
-            print('Loading methylation pickle')
-            return pickle.load(open(pickle_meth, 'rb')), pickle.load(open(pickle_meth_names, 'rb'))
-        else:
-            df = pd.read_csv(open('methylation/processed_methylation.csv', 'r', encoding='latin-1'))
-            final = []
-            names = []
-            for l in df.to_numpy()[:-2]:
-                l = l[0].split()
-                names.append(l[1])
-                l = l[1:]
-                for i in range(498 - len(l)):
-                    l.append(0.0)
-                final.append(l)
-            final = np.vstack(final)
-            pickle.dump(final, open(pickle_meth, 'wb'))
-            pickle.dump(names, open(pickle_meth_names, 'wb'))
-            return final.T, names
-
-def gen_profiles(num_profiles, genes, n_markers, noise, std, m_amp=3):
+def gen_profiles(num_profiles, genes, n_markers, noise, std=0.05, m_amp=3):
     profiles = []
 
     for p in range(num_profiles):
@@ -102,95 +46,207 @@ def gen_samples(profiles, n_samples, std):
     return samples, proportions.T
 
 
-def test_on_sim_data():
-    #stds = [0.01, 0.1, 0.2, 0.3, 0.5, 1, 2]
-    #stds = [0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1]
-    stds = [0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
-    num_datasets = 20
-    num_celltypes = 3
-    num_markers = 200
-    num_samples = 500
-    num_genes = 10000
-    noise = 'norm' # or cauchy
+#stds = [0.01, 0.1, 0.2, 0.3, 0.5, 1, 2]
+#stds = [0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1]
+stds = [0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
+num_datasets = 20
+num_celltypes = 3
+num_markers = 200
+num_samples = 500
+num_genes = 10000
+noise = 'norm' # or cauchy
 
-    pca_mse_all = []
-    ica_mse_all = []
-    nmf_mse_all = []
-    rnd_mse_all = []
+pca_mse_all = []
+ica_mse_all = []
+nmf_mse_all = []
+rnd_mse_all = []
+
+pca_mse_plt_all = []
+ica_mse_plt_all = []
+nmf_mse_plt_all = []
+rnd_mse_plt_all = []
+
+props_all = []
+
+for std in stds:
+    print('std: ' + str(std))
+    pca_mse = 0
+    ica_mse = 0
+    nmf_mse = 0
+    rnd_mse = 0
+
+    
+    pca_mse_plt = []
+    ica_mse_plt = []
+    nmf_mse_plt = []
+    rnd_mse_plt = []
+    
+    props = []
+    for i in range(num_datasets):
+        print('dataset: ' + str(i+1))
+        profiles = gen_profiles(num_celltypes, num_genes, num_markers, noise, std)
+        samples, proportions = gen_samples(profiles, num_samples, std)
+        
+        # FEATURE SELECTION USING CONCRETE AUTOENCODER
+
+        # preprocessing
+        samples_normalized = normalize(samples, axis=0).T
+        if np.min(samples_normalized) < 0:
+            samples_normalized -= np.min(samples_normalized)
+
+        # PCA
+        pca = PCA(n_components=num_celltypes)
+        X_pca = pca.fit_transform(samples_normalized)
+        # normalize result
+        n = X_pca - np.expand_dims(np.amin(X_pca, axis=1), axis=1)
+        res_p = n / np.expand_dims(np.sum(n, axis=1), axis=1)
+        pca_mse += mean_squared_error(proportions, res_p)
+        # calculate pearson correlation
+        pca_mse_plt.append([mean_squared_error(proportions[:,i],res_p[:,i]) for i in range(num_celltypes)])
+        
+
+        # ICA
+        ica = FastICA(n_components=num_celltypes)
+        X_ica = ica.fit_transform(samples_normalized)
+        n = X_ica - np.expand_dims(np.amin(X_ica, axis=1), axis=1)
+        res_i = n / np.expand_dims(np.sum(n, axis=1), axis=1)
+        ica_mse += mean_squared_error(proportions, res_i)
+        ica_mse_plt.append([mean_squared_error(proportions[:,i],res_i[:,i]) for i in range(num_celltypes)])
+        
+        # NMF
+        model = NMF(n_components=num_celltypes)
+        W = model.fit_transform(samples_normalized)
+        res_n = W / np.expand_dims(np.sum(W, axis=1), axis=1)
+        nmf_mse  += (mean_squared_error(proportions, res_n))
+        nmf_mse_plt.append([mean_squared_error(proportions[:,i],res_n[:,i]) for i in range(num_celltypes)])
+        
+        # Random proportions
+        rnd_prop = np.random.rand(num_celltypes,num_samples)
+        rnd_prop /= np.sum(rnd_prop, axis = 0)
+        rnd_mse += mean_squared_error(proportions, rnd_prop.T)
+        rnd_mse_plt.append([mean_squared_error(proportions[:,i],rnd_prop.T[:,i]) for i in range(num_celltypes)])
+        
+        props.append([res_p, res_i, res_n, rnd_prop.T, proportions])
+
+    # average over all datasets
+    pca_mse_all.append(pca_mse/num_datasets)
+    ica_mse_all.append(ica_mse/num_datasets)
+    nmf_mse_all.append(nmf_mse/num_datasets)
+    rnd_mse_all.append(rnd_mse/num_datasets)
+    
+    pca_mse_plt_all.append(np.matrix(pca_mse_plt))
+    ica_mse_plt_all.append(np.matrix(ica_mse_plt))
+    nmf_mse_plt_all.append(np.matrix(nmf_mse_plt))
+    rnd_mse_plt_all.append(np.matrix(rnd_mse_plt))
+    
+    props_all.append(props)
+
+
+pca_mse = []
+ica_mse = []
+nmf_mse = []
+rnd_mse = []
+for i in range(len(stds)):
+    pca_mse.append(np.array(np.mean(pca_mse_plt_all[i],axis = 0))[0])
+    ica_mse.append(np.array(np.mean(ica_mse_plt_all[i],axis = 0))[0])
+    nmf_mse.append(np.array(np.mean(nmf_mse_plt_all[i],axis = 0))[0])
+    rnd_mse.append(np.array(np.mean(rnd_mse_plt_all[i],axis = 0))[0])
+    
+pca_mse = np.matrix(pca_mse)
+ica_mse = np.matrix(ica_mse)
+nmf_mse = np.matrix(nmf_mse)
+rnd_mse = np.matrix(rnd_mse)
+    
+fig, axs = plt.subplots(1,num_celltypes+1)
+for i in range(num_celltypes):
+    axs[i].plot(stds,pca_mse[:,i], label='PCA')
+    axs[i].plot(stds,ica_mse[:,i], label='ICA')
+    axs[i].plot(stds,nmf_mse[:,i], label='NMF')
+    axs[i].plot(stds,rnd_mse[:,i], label='Random')
+    axs[i].set_xlabel("Standard deviation")
+    axs[i].set_ylabel("MSE")
+    axs[i].set_title("Cell type: " + str(i+1))
+    axs[i].set_ylim([0.03,0.17])
+axs[num_celltypes].plot(stds, pca_mse_all, label='PCA')
+axs[num_celltypes].plot(stds, ica_mse_all, label='ICA')
+axs[num_celltypes].plot(stds, nmf_mse_all, label='NMF')
+axs[num_celltypes].plot(stds, rnd_mse_all, label = 'Random')
+axs[num_celltypes].set_xlabel("Standard deviation")
+axs[num_celltypes].set_ylabel("MSE")
+axs[num_celltypes].set_title("Overall")
+axs[num_celltypes].set_ylim([0.03,0.17])
+handles, labels = axs[num_celltypes].get_legend_handles_labels()
+fig.legend(handles, labels, loc='upper center')
+
+
+colors = ['blue','green','red','orange','purple']
+for k in range(4):
+    fig, axs = plt.subplots(1,7)
+    fig.set_size_inches(16,3.5)
+    for i in range(len(stds)):
+        axs[i].set_title("Std: " + str(stds[i]))
+        axs[i].tick_params(axis='both', which='major', labelsize=8) 
+        axs[i].tick_params(axis='both', which='minor', labelsize=8)
+        axs[i].plot([0,1],[0,1])
+        for j in range(num_datasets):
+            for cl in range(num_celltypes):
+                axs[i].scatter(props_all[i][j][4][:,0],props_all[i][j][k][:,cl],c=colors[cl],s=1)
+                axs[i].scatter(props_all[i][j][4][:,0],props_all[i][j][k][:,cl],c=colors[cl],s=1)
+                axs[i].scatter(props_all[i][j][4][:,0],props_all[i][j][k][:,cl],c=colors[cl],s=1)
+            
+    fig.text(0.5, 0.04, 'Real proportions', ha='center', va='center')
+    fig.text(0.10, 0.5, 'Estimated proportions', ha='center', va='center', rotation='vertical')
+    
+# Benchmark data            
+#gs_data = np.matrix(pd.read_excel(r'GSE19830.xlsx', header=None))
+#gs_prop = np.matrix(pd.read_excel(r'gs_prop.xlsx', header= None))
+#gs_normalized = normalize(gs_data, axis=0).T
+#gs_normalized = gs_data.T
+#
+#pca = PCA(n_components=3)
+#X_pca = pca.fit_transform(gs_normalized)
+## normalize result
+#n = X_pca - np.expand_dims(np.amin(X_pca, axis=1), axis=1)
+#res_p = n / np.expand_dims(np.sum(n, axis=1), axis=1)
+## calculate pearson correlation
+#
+#       
+#
+## ICA
+#ica = FastICA(n_components=3)
+#X_ica = ica.fit_transform(gs_normalized)
+#n = X_ica - np.expand_dims(np.amin(X_ica, axis=1), axis=1)
+#res_i = n / np.expand_dims(np.sum(n, axis=1), axis=1)
+#
+## NMF
+#model = NMF(n_components=3)
+#W = model.fit_transform(gs_normalized)
+#res_n = W / np.expand_dims(np.sum(W, axis=1), axis=1)
+#
+#fig,axs = plt.subplots(1,3)
+#esti_props = [res_p,res_i,res_n]
+#for i,ax in enumerate(axs):
+#    ax.scatter(np.array(gs_prop[:,0]),esti_props[i][:,0],c = 'blue')
+#    ax.scatter(np.array(gs_prop[:,1]),esti_props[i][:,1],c = 'green')
+#    ax.scatter(np.array(gs_prop[:,2]),esti_props[i][:,2],c = 'red')
+#    ax.plot([0,1],[0,1])
 
 
 
 
-    for std in stds:
-        pca_mse = 0
-        ica_mse = 0
-        nmf_mse = 0
-        rnd_mse = 0
-
-        for i in range(num_datasets):
-            profiles = gen_profiles(num_celltypes, num_genes, num_markers, noise, std)
-            samples, proportions = gen_samples(profiles, num_samples, std)
-            # FEATURE SELECTION USING CONCRETE AUTOENCODER
-
-            # preprocessing
-            samples_normalized = normalize(samples, axis=0).T
-            if np.min(samples_normalized) < 0:
-                samples_normalized -= np.min(samples_normalized)
-
-            # PCA
-            pca = PCA(n_components=num_celltypes)
-            X_pca = pca.fit_transform(samples_normalized)
-            # normalize result
-            n = X_pca - np.expand_dims(np.amin(X_pca, axis=1), axis=1)
-            res = n / np.expand_dims(np.sum(n, axis=1), axis=1)
-            print(np.shape(res))
-            pca_mse += mean_squared_error(proportions, res)
-
-            # ICA
-            ica = FastICA(n_components=num_celltypes)
-            X_ica = ica.fit_transform(samples_normalized)
-            n = X_ica - np.expand_dims(np.amin(X_ica, axis=1), axis=1)
-            res = n / np.expand_dims(np.sum(n, axis=1), axis=1)
-            ica_mse += mean_squared_error(proportions, res)
-
-            # NMF
-            model = NMF(n_components=num_celltypes)
-            W = model.fit_transform(samples_normalized)
-
-            nmf_mse  += (mean_squared_error(proportions, res))
-
-            # Random proportions
-            rnd_prop = np.random.rand(num_celltypes,num_samples)
-            rnd_prop /= np.sum(rnd_prop, axis = 0)
-            rnd_mse += mean_squared_error(proportions, rnd_prop.T)
-
-        # average over all datasets
-        pca_mse_all.append(pca_mse/num_datasets)
-        ica_mse_all.append(ica_mse/num_datasets)
-        nmf_mse_all.append(nmf_mse/num_datasets)
-        rnd_mse_all.append(rnd_mse/num_datasets)
-
-    plt.figure()
-    plt.plot(stds, pca_mse_all, label='pca')
-    plt.plot(stds, ica_mse_all, label='ica')
-    plt.plot(stds, nmf_mse_all, label='nmf')
-    plt.plot(stds, rnd_mse_all, label = 'random')
-    plt.xlabel("Standard deviation")
-    plt.ylabel("MSE")
-    #plt.ylim(0, 0.15)
-    plt.title("MSE per method, " + str(num_markers) + " marker genes, " + str(num_celltypes) + " cell types")
-    plt.legend()
-    plt.show()
 
 
-meth_data, meth_names = read_data('meth')
-expr_data, expr_names = read_data('expr')
-print(meth_names, expr_names)
-model = NMF(n_components=5)
-print('Computing methylation proportions')
-W = model.fit_transform(meth_data.T)
-meth_res = W / np.expand_dims(np.sum(W, axis=1), axis=1)
-print('Computing expression proportions')
-W = model.fit_transform(expr_data)
-expr_res = W / np.expand_dims(np.sum(W, axis=1), axis=1)
-# print(mean_squared_error(expr_res, meth_res))
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
